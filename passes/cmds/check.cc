@@ -68,6 +68,7 @@ struct CheckPass : public Pass {
 		bool mapped = false;
 		bool allow_tbuf = false;
 		bool assert_mode = false;
+		bool allow_loops = false;
 
 		size_t argidx;
 		for (argidx = 1; argidx < args.size(); argidx++) {
@@ -89,6 +90,10 @@ struct CheckPass : public Pass {
 			}
 			if (args[argidx] == "-assert") {
 				assert_mode = true;
+				continue;
+			}
+			if (args[argidx] == "-allow-loops") {
+				allow_loops = true;
 				continue;
 			}
 			break;
@@ -281,6 +286,7 @@ struct CheckPass : public Pass {
 				}
 
 			topo.sort();
+			if (!allow_loops)
 			for (auto &loop : topo.loops) {
 				string message = stringf("found logic loop in module %s:\n", log_id(module));
 
