@@ -926,6 +926,7 @@ struct SimInstance
 					log("Assumption %s.%s (%s) failed.\n", hiername().c_str(), log_id(cell), label.c_str());
 
 				if (cell->type == ID($assert) && en == State::S1 && a != State::S1) {
+					log_cell(cell, ">>> ");
 					log_cell_w_hierarchy("Failed assertion", cell);
 					if (shared->serious_asserts)
 						log_error("Assertion %s.%s (%s) failed.\n", hiername().c_str(), log_id(cell), label.c_str());
