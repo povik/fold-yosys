@@ -158,6 +158,8 @@ class WType:
 			return enum_by_name(self.name).namespace + "::" + self.name + postfix
 		if self.name in classnames:
 			return class_by_name(self.name).namespace + "::" + self.name + postfix
+		if self.name == "istream_handle":
+			return "istream_refptr"
 		text = self.name
 		if self.cont != None:
 			text += "<"
@@ -234,11 +236,14 @@ class WType:
 			t.attr_type = attr_types.amp
 			str_def = str_def.replace("&","")
 
-		if len(str_def) > 0 and str_def.split("::")[-1] not in primitive_types and str_def.split("::")[-1] not in classnames and str_def.split("::")[-1] not in enum_names:
+		if len(str_def) > 0 and str_def.split("::")[-1] not in primitive_types \
+				and str_def.split("::")[-1] not in classnames \
+				and str_def.split("::")[-1] not in enum_names \
+				and str_def != "istream_refptr":
 			return None
 
 		if str_def.count(" ") == 0:
-			t.name = (prefix + str_def).replace("char_p", "char *")
+			t.name = (prefix + str_def).replace("char_p", "char *").replace("istream_refptr", "istream_handle")
 			t.cont = None
 			return t
 		return None
@@ -585,6 +590,8 @@ class Attribute:
 			prefix = "short " + prefix
 			str_def = str_def[6:]
 
+		str_def = str_def.replace("std::istream *&", "istream_refptr ")
+
 		if str_def.find("<") != -1 and str_def.find("<") < str_def.find(" "):
 			closing = find_closing(str_def[str_def.find("<"):], "<", ">") + str_def.find("<") + 1
 			arg.wtype = WType.from_string(str_def[:closing].strip(), containing_file, line_number)
@@ -666,6 +673,8 @@ class Attribute:
 			return prefix + known_containers[self.wtype.name].gen_type(self.wtype.cont.args) + " " + infix + self.gen_varname()
 		if self.wtype.name in classnames:
 			return prefix + class_by_name(self.wtype.name).namespace + "::" + self.wtype.name + " " + infix + self.gen_varname()
+		if self.wtype.name == "istream_handle":
+			return prefix + "istream_refptr " + infix + self.gen_varname()
 		return prefix + self.wtype.name + " " + infix + self.gen_varname()
 
 	#Generates the listitem withtout the varname, so the signature can be
@@ -703,6 +712,8 @@ class Attribute:
 			if self.wtype.attr_type != attr_types.star:
 				ret = "*" + ret
 			return ret + "->get_cpp_obj()"
+		if self.wtype.name == "istream_handle":
+			return ret + ".get_cpp_obj()"
 		if self.wtype.name == "char *" and self.gen_varname() in ["format", "fmt"]:
 			return "\"%s\", " + self.gen_varname()
 		if self.wtype.attr_type == attr_types.star:
@@ -715,7 +726,7 @@ class Attribute:
 			if self.wtype.attr_type == attr_types.star:
 				return "&" + ret
 			return ret
-		if self.wtype.name not in classnames:
+		if self.wtype.name not in classnames and self.wtype.name != "istream_handle":
 			if self.wtype.attr_type == attr_types.star:
 				return "&" + ret + "___tmp"
 			return ret + "___tmp"
@@ -912,8 +923,8 @@ class WClass:
 		static_funs = []
 		for fun in self.found_funs:
 			text += fun.gen_boost_py()
-			if fun.is_static and fun.alias not in static_funs:
-				static_funs.append(fun.alias)
+			if fun.is_static and fun.name not in static_funs:
+				static_funs.append(fun.name)
 		for fun in static_funs:
 			text += "\n\t\t\t.staticmethod(\"" + fun + "\")"
 
@@ -962,6 +973,7 @@ sources = [
 	Source("kernel/log",[]),
 	Source("kernel/register",[
 		WClass("Pass", link_types.derive, None, None, None, True),
+		WClass("Frontend", link_types.derive, None, None, None, True),
 		]
 		),
 	Source("kernel/rtlil",[
@@ -1003,7 +1015,10 @@ sources = [
 	Source("kernel/cost",[])
 	]
 
-blacklist_methods = ["YOSYS_NAMESPACE::Pass::run_register", "YOSYS_NAMESPACE::Module::Pow"]
+blacklist_methods = ["YOSYS_NAMESPACE::Pass::run_register",
+					 "YOSYS_NAMESPACE::Frontend::run_register",
+					 "YOSYS_NAMESPACE::Frontend::frontend_call",
+					 "YOSYS_NAMESPACE::Module::Pow"]
 
 enum_names = ["State","SyncType","ConstFlags"]
 
@@ -1267,6 +1282,10 @@ class WFunction:
 		func.member_of = class_
 		func.duplicate = False
 		func.namespace = namespace
+
+		if "override final" in str_def:
+			return None
+
 		str_def = str_def.replace("operator ","operator")
 		if str.startswith(str_def, "static "):
 			func.is_static = True
@@ -1569,11 +1588,13 @@ class WFunction:
 		return_stmt = "return " if self.ret_type.name != "void" else ""
 
 		text += ")\n\t\t{"
-		text += "\n\t\t\tif (boost::python::override py_" + self.alias + " = this->get_override(\"py_" + self.alias + "\"))"
-		text += f"\n\t\t\t\t{return_stmt}" + call_string
-		text += "\n\t\t\telse"
-		text += f"\n\t\t\t\t{return_stmt}" + self.member_of.name + "::" + call_string
-		text += "\n\t\t}"
+		text += "\n\t\t\tif(boost::python::override py_" + self.alias + " = this->get_override(\"py_" + self.alias + "\")) {"
+		text += "\n\t\t\ttry {"
+		text += "\n\t\t\t\t{return_stmt}" + call_string
+		text += "\n\t\t\t} catch(...) { PyErr_Print(); }"
+		text += "\n\t\t\t} else {"
+		text += "\n\t\t\t\t{return_stmt}" + self.member_of.name + "::" + call_string
+		text += "\n\t\t} }"
 
 		text += "\n\n\t\t" + self.ret_type.gen_text() + " default_py_" + self.alias + "("
 		for arg in self.args:
@@ -1615,7 +1636,7 @@ class WFunction:
 			if self.member_of != None and self.member_of.link_type == link_types.derive and self.is_virtual:
 				text += "(\"py_" + self.alias + "\""
 			else:
-				text += "(\"" + self.alias + "\""
+				text += "(\"" + self.name + "\""
 		if self.member_of != None:
 			text += ", &" + self.member_of.name + "::"
 			if self.member_of.link_type == link_types.derive and self.is_virtual:
@@ -1722,17 +1743,19 @@ class WMember:
 		return member
 
 	def gen_decl(self):
-		text = "\n\t\t" + self.wtype.gen_text() + " get_var_py_" + self.name + "();\n"
+		text = "\n\t\t" + ("YOSYS_PYTHON::" if self.wtype.name in classnames else "") \
+			   + self.wtype.gen_text() + " get_var_py_" + self.name + "();\n"
 		if self.is_const:
 			return text
 		if self.wtype.name in classnames:
-			text += "\n\t\tvoid set_var_py_" + self.name + "(" + self.wtype.gen_text() + " *rhs);\n"
+			text += "\n\t\tvoid set_var_py_" + self.name + "(YOSYS_PYTHON::" + self.wtype.gen_text() + " *rhs);\n"
 		else:
 			text += "\n\t\tvoid set_var_py_" + self.name + "(" + self.wtype.gen_text() + " rhs);\n"
 		return text
 
 	def gen_def(self):
-		text = "\n\t" + self.wtype.gen_text() + " " + self.member_of.name +"::get_var_py_" + self.name + "()"
+		text = "\n\t" + ("YOSYS_PYTHON::" if self.wtype.name in classnames else "")+ \
+				self.wtype.gen_text() + " " + self.member_of.name +"::get_var_py_" + self.name + "()"
 		text += "\n\t{\n\t\t"
 		if self.wtype.attr_type == attr_types.star:
 			text += "if(this->get_cpp_obj()->" + self.name + " == NULL)\n\t\t\t"
@@ -1740,13 +1763,13 @@ class WMember:
 		if self.wtype.name in known_containers:
 			text += self.wtype.gen_text_cpp()
 		else:
-			text += self.wtype.gen_text()
+			text += ("YOSYS_PYTHON::" if self.wtype.name in classnames else "") + self.wtype.gen_text()
 
 		if self.wtype.name in classnames or (self.wtype.name in known_containers and self.wtype.attr_type == attr_types.star):
 			text += "*"
 		text += " ret_ = "
 		if self.wtype.name in classnames:
-			text += self.wtype.name + "::get_py_obj("
+			text += "YOSYS_PYTHON::" + self.wtype.name + "::get_py_obj("
 			if self.wtype.attr_type != attr_types.star:
 				text += "&"
 		text += "this->get_cpp_obj()->" + self.name
@@ -1769,7 +1792,7 @@ class WMember:
 		ret = Attribute(self.wtype, "rhs");
 
 		if self.wtype.name in classnames:
-			text += "\n\tvoid " + self.member_of.name+ "::set_var_py_" + self.name + "(" + self.wtype.gen_text() + " *rhs)"
+			text += "\n\tvoid " + self.member_of.name+ "::set_var_py_" + self.name + "(YOSYS_PYTHON::" + self.wtype.gen_text() + " *rhs)"
 		else:
 			text += "\n\tvoid " + self.member_of.name+ "::set_var_py_" + self.name + "(" + self.wtype.gen_text() + " rhs)"
 		text += "\n\t{"
@@ -2214,6 +2237,8 @@ def inherit_members():
 				for var in base_vars:
 					var.member_of = class_
 					var.namespace = class_.namespace
+				child_funs = set(f.name for f in class_.found_funs)
+				base_funs = [f for f in base_funs if f.name not in child_funs]
 				class_.found_funs.extend(base_funs)
 				class_.found_vars.extend(base_vars)
 
@@ -2314,6 +2339,21 @@ def gen_wrappers(filename, debug_level_ = 0):
 USING_YOSYS_NAMESPACE
 
 namespace YOSYS_PYTHON {
+
+	typedef std::istream *& istream_refptr;
+	struct istream_handle {
+		istream_refptr p;
+
+		istream_refptr get_cpp_obj()
+		{
+			return p;
+		}
+
+		static istream_handle get_py_obj(istream_refptr p)
+		{
+			return istream_handle{p};
+		}
+	};
 
 	struct YosysStatics{};
 """)
@@ -2432,6 +2472,13 @@ namespace YOSYS_PYTHON {
 		Yosys::log_streams.insert(Yosys::log_streams.begin(), output);
 	};
 
+	std::string read_istream(istream_handle stream)
+	{
+		istream_refptr stream_tmp = stream.get_cpp_obj();
+		std::string s(std::istreambuf_iterator<char>(*stream_tmp), {});
+
+		return s;
+	};
 
 	BOOST_PYTHON_MODULE(libyosys)
 	{
@@ -2440,7 +2487,11 @@ namespace YOSYS_PYTHON {
 		class_<Initializer>("Initializer");
 		scope().attr("_hidden") = new Initializer();
 
+		//class_<istream_refptr>("istream_refptr");
+		class_<istream_handle /*, boost::noncopyable*/>("istream_handle", no_init);
+
 		def("log_to_stream", &log_to_stream);
+		def("read_istream", &read_istream);
 """)
 
 	for enum in enums:
