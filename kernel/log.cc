@@ -447,8 +447,19 @@ void log_warning_noprefix(const char *format, ...)
 
 void log_error(const char *format, ...)
 {
+	//va_list ap;
+	//va_start(ap, format);
+	//logv_error(format, ap);
 	va_list ap;
 	va_start(ap, format);
+
+	if (log_cmd_error_throw) {
+		log_last_error = vstringf(format, ap);
+		log("ERROR: %s", log_last_error.c_str());
+		log_flush();
+		throw log_cmd_error_exception();
+	}
+
 	logv_error(format, ap);
 }
 
